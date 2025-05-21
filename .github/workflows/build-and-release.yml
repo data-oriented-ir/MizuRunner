@@ -1,0 +1,106 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # workflow_dispatch: # Manual trigger via GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # -------------------------
+      # WINDOWS: Use MinGW via MSYS2
+      # -------------------------
+      - name: Install MinGW (Windows only)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            make
+
+      - name: Build with MinGW (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          /ucrt64/bin/cmake.exe -S . -B build
+          /ucrt64/bin/cmake.exe --build build --config Release
+
+      - name: Archive binary (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p artifact
+          cp build/mizu.exe artifact/mizu.windows64.exe
+          cp build/mizu-trace.exe artifact/mizu-trace.windows64.exe
+
+      # -------------------------
+      # LINUX/macOS
+      # -------------------------
+      - name: Configure and Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S . -B build
+          cmake --build build --config Release
+
+      - name: Archive binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifact
+          cp build/mizu artifact/mizu.linux64
+          cp build/mizu-trace artifact/mizu-trace.linux64
+        shell: bash
+
+      - name: Archive binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifact
+          cp build/mizu artifact/mizu.apple-silicon
+          cp build/mizu-trace artifact/mizu-trace.apple-silicon
+        shell: bash
+
+
+      # -------------------------
+      # PACKAGE OUTPUT
+      # -------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-binary
+          path: artifact/
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
